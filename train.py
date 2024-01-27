@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import pickle 
 import torch as th
 from torch.utils.data import Dataset, DataLoader
 import LSMDC as LD2
@@ -74,7 +74,7 @@ args = parser.parse_args()
 
 print(args)
 
-root_feat = os.path.join('data', 'data')
+root_feat = os.path.join('/home/paptheop01/drive/data', 'data')
 
 mp_visual_path = os.path.join(root_feat, 'X_resnet.npy')
 mp_flow_path = os.path.join(root_feat, 'X_flow.npy')
@@ -195,169 +195,8 @@ else:
     face_ind_test = np.load(os.path.join(root_feat, 'no_face_ind_retrieval.npy'))
     face_ind_test = 1 - face_ind_test
 print('Done.')
+with open('/mnt/disks/disk-1/train_loader_ant_test.pkl', 'wb') as file:
+    pickle.dump(dataloader, file)
 
-# Model
-video_modality_dim = {'face': (128, 128), 'audio': (128 * 16, 128),
-                      'visual': (2048, 2048), 'motion': (1024, 1024)}
-net = Net(video_modality_dim, 300,
-          audio_cluster=16, text_cluster=args.text_cluster_size)
-net.train()
 
-if args.GPU:
-    net.cuda()
 
-# Optimizers + Loss
-max_margin = MaxMarginRankingLoss(margin=args.margin)
-
-if args.optimizer == 'adam':
-    optimizer = optim.Adam(net.parameters(), lr=args.lr)
-elif args.optimizer == 'sgd':
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum)
-
-if args.GPU:
-    max_margin.cuda()
-
-n_display = args.n_display
-dataset_size = len(dataset)
-lr_decay = args.lr_decay
-
-print('Starting training loop ...')
-
-for epoch in range(args.epochs):
-    running_loss = 0.0
-    print('epoch: %d' % epoch)
-
-    for i_batch, sample_batched in enumerate(dataloader):
-
-        if args.MSRVTT:
-            captions = sample_batched['text']
-            audio = sample_batched['audio']
-        else:
-            captions = dataset.shorteningTextTensor(sample_batched['text'],
-                                                    sample_batched['text_size'])
-
-            audio = dataset.shorteningTextTensor(sample_batched['audio'],
-                                                 sample_batched['audio_size'])
-
-        face = sample_batched['face']
-        video = sample_batched['video']
-        flow = sample_batched['flow']
-        coco_ind = sample_batched['coco_ind']
-        face_ind = sample_batched['face_ind']
-
-        ind = {}
-        ind['face'] = face_ind
-        ind['visual'] = np.ones((len(face_ind)))
-        ind['motion'] = 1 - coco_ind
-        ind['audio'] = 1 - coco_ind
-
-        if args.GPU:
-            captions, video = Variable(captions.cuda()), Variable(video.cuda())
-            audio, flow = Variable(audio.cuda()), Variable(flow.cuda())
-            face = Variable(face.cuda())
-
-        optimizer.zero_grad()
-        confusion_matrix = net(captions,
-                               {'face': face, 'audio': audio, 'visual': video, 'motion': flow}, ind, True)
-        loss = max_margin(confusion_matrix)
-        loss.backward()
-
-        optimizer.step()
-        running_loss += loss.data
-
-        if (i_batch + 1) % n_display == 0:
-            print('Epoch %d, Epoch status: %.2f, Training loss: %.4f' % (epoch + 1,
-                                                                         args.batch_size * float(
-                                                                             i_batch) / dataset_size,
-                                                                         running_loss / n_display))
-            running_loss = 0.0
-
-    print('evaluating epoch %d ...' % (epoch + 1))
-    net.eval()
-
-    if args.MSRVTT:
-        retrieval_samples = dataset.getRetrievalSamples()
-
-        video = Variable(retrieval_samples['video'].cuda(), volatile=True)
-        captions = Variable(retrieval_samples['text'].cuda(), volatile=True)
-        audio = Variable(retrieval_samples['audio'].cuda(), volatile=True)
-        flow = Variable(retrieval_samples['flow'].cuda(), volatile=True)
-        face = Variable(retrieval_samples['face'].cuda(), volatile=True)
-        face_ind = retrieval_samples['face_ind']
-
-        ind = {}
-        ind['face'] = face_ind
-        ind['visual'] = np.ones((len(face_ind)))
-        ind['motion'] = np.ones((len(face_ind)))
-        ind['audio'] = np.ones((len(face_ind)))
-
-        conf = net(captions,
-                   {'face': face, 'audio': audio, 'visual': video, 'motion': flow}, ind, True)
-        confusion_matrix = conf.data.cpu().float().numpy()
-        metrics = compute_metric(confusion_matrix)
-        verbose(epoch, args.batch_size * float(i_batch) / dataset_size, metrics, name='MSRVTT')
-
-    else:
-        video = Variable(vid_retrieval_val.cuda(), volatile=True)
-        captions = Variable(text_retrieval_val.cuda(), volatile=True)
-        audio = Variable(audio_retrieval_val.cuda(), volatile=True)
-        flow = Variable(flow_retrieval_val.cuda(), volatile=True)
-        face = Variable(face_retrieval_val.cuda(), volatile=True)
-
-        ind = {}
-        ind['face'] = face_ind_test
-        ind['visual'] = np.ones((len(face_ind_test)))
-        ind['motion'] = np.ones((len(face_ind_test)))
-        ind['audio'] = np.ones((len(face_ind_test)))
-
-        conf = net(captions,
-                   {'face': face, 'audio': audio, 'visual': video, 'motion': flow}, ind, True)
-        confusion_matrix = conf.data.cpu().float().numpy()
-        metrics = compute_metric(confusion_matrix)
-        verbose(epoch, args.batch_size * float(i_batch) / dataset_size, metrics, name='MPII')
-
-    net.train()
-
-    if args.eval_qcm and not (args.MSRVTT):
-        print('LSMDC Multiple-Choice evaluation computation')
-        net.eval()
-        scores = []
-
-        for i_batch, sample_batched in enumerate(qcm_dataloader):
-            captions = sample_batched['text']
-
-            audio = qcm_dataset.shorteningTextTensor(sample_batched['audio'],
-                                                     sample_batched['audio_size'])
-
-            video = sample_batched['video']
-            video = sample_batched['video']
-            flow = sample_batched['flow']
-            face = sample_batched['face']
-            face_ind = sample_batched['face_ind']
-
-            ind = {}
-            ind['face'] = face_ind
-            ind['visual'] = np.ones((len(face_ind)))
-            ind['motion'] = np.ones((len(face_ind)))
-            ind['audio'] = np.ones((len(face_ind)))
-
-            if args.GPU:
-                captions, video = Variable(captions.cuda(), volatile=True), Variable(video.cuda(), volatile=True)
-                audio, flow = Variable(audio.cuda(), volatile=True), Variable(flow.cuda(), volatile=True)
-                face = Variable(face.cuda(), volatile=True)
-
-            s = net(captions, {'face': face, 'audio': audio, 'visual': video, 'motion': flow}, ind, False)
-            s = s.data.cpu().float().numpy()
-            scores.extend(s)
-
-        scores = np.array(scores)
-        scores = np.reshape(scores, (len(qcm_dataset), 5))
-        pred = np.argmax(scores, axis=1) + 1
-
-        accuracy_qcm = sum(pred == qcm_gt) / float(len(pred))
-        print('Accuracy Multiple-Choice: %.3f' % accuracy_qcm)
-
-        net.train()
-
-    for param_group in optimizer.param_groups:
-        param_group['lr'] *= lr_decay

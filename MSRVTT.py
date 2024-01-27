@@ -114,38 +114,36 @@ class MSRVTT(Dataset):
         print ('done')
 
     def collate_data(self, data):
-        video_tensor = np.zeros((len(data), 2048))
-        flow_tensor = np.zeros((len(data), 1024))
-        face_tensor = np.zeros((len(data), 128))
-        audio_tensor = np.zeros((len(data), self.max_words,128))
-        text_tensor = np.zeros((len(data), self.max_words, 300))
+        video_tensor = np.zeros((len(data), 2048+1))
+        flow_tensor = np.zeros((len(data), 1024+1))
+        face_tensor = np.zeros((len(data), 128+1))
+        audio_tensor = np.zeros((len(data), self.max_words*128+1))
+        text_tensor = np.zeros((len(data), self.max_words*300+1))
         coco_ind = np.zeros((len(data)))
         face_ind = np.zeros((len(data)))
-
+        whole_vid=np.zeros((len(data),2048+1+ 1024+1+128+1+self.max_words*128+1+self.max_words*300+1))
+        w0=np.array([0])
+        w1=np.array([1])
         for i in range(len(data)):
 
-            coco_ind[i] = data[i]['coco_ind']
+            
             face_ind[i] = data[i]['face_ind']
-            video_tensor[i] = data[i]['video']
-            flow_tensor[i] = data[i]['flow']
+            video_tensor[i] = np.concatenate((data[i]['video'],w1))  if (len(data[i]['face']) > 0) else np.concatenate((data[i]['video'],w0))
+            flow_tensor[i] = np.concatenate((data[i]['flow'],w1))
 
             if len(data[i]['face']) > 0:
-                face_tensor[i] = data[i]['face']
+                face_tensor[i] = np.concatenate((data[i]['face'],w1))
             
             la = len(data[i]['audio'])
-            audio_tensor[i,:min(la,self.max_words), :] = data[i]['audio'][:min(self.max_words,la)]
-
+            audio_tensor[i,:min(la,self.max_words)*128] = data[i]['audio'][:min(self.max_words,la)].flatten() 
+            audio_tensor[i,-1]=1  if (len(data[i]['face']) > 0) else 0
             lt = len(data[i]['text'])
-            text_tensor[i,:min(lt,self.max_words), :] = data[i]['text'][:min(self.max_words,lt)]
-
-
-        return {'video': th.from_numpy(video_tensor).float(),
-                'flow': th.from_numpy(flow_tensor).float(),
-                'face': th.from_numpy(face_tensor).float(),
-                'coco_ind': coco_ind,
-                'face_ind': face_ind,
-                'text': th.from_numpy(text_tensor).float(),
-                'audio': th.from_numpy(audio_tensor).float()}
+            text_tensor[i,:min(lt,self.max_words)*300] = data[i]['text'][:min(self.max_words,lt)].flatten()
+            text_tensor[i,-1]=1  if (len(data[i]['face']) > 0) else 0
+            whole_vid[i]=np.concatenate((video_tensor[i],flow_tensor[i],face_tensor[i],audio_tensor[i],text_tensor[i]))
+        return {
+                'feats':th.from_numpy(whole_vid).float()
+                }
 
 
     def __len__(self):
